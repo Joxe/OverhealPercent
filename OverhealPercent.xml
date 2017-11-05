@@ -1,0 +1,14 @@
+<Ui xmlns="http://www.blizzard.com/wow/ui/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.blizzard.com/wow/ui/..\..\FrameXML\UI.xsd">
+	<Script File="OverhealPercent.lua"/>
+
+	<Frame name="OverhealPercent">
+		<Scripts>
+			<OnLoad>
+				OverhealPercent.OnLoad(this);
+			</OnLoad>
+			<OnEvent>
+				OverhealPercent.OnEvent(event, arg);
+			</OnEvent>
+		</Scripts>
+	</Frame>
+</Ui>
