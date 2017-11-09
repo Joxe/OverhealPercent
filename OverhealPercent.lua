@@ -1,3 +1,5 @@
+local DidCompile = false;
+
 OverhealPercent = {}
 OverhealPercent.orderedCaptureData = {}
 OverhealPercent.unorderedCaptureData = {}
@@ -18,8 +20,8 @@ OverhealPercent.playerName = "";
 
 OverhealPercent.m_healAmount = 0;
 OverhealPercent.m_overhealAmount = 0;
-OverhealPercent.m_numberOfHits = 0;
-OverhealPercent.m_numberOfCrits = 0;
+OverhealPercent.m_battleNumberOfHeals = 0;
+OverhealPercent.m_battleNumberOfCrits = 0;
 OverhealPercent.m_sessionHealAmount = 0;
 OverhealPercent.m_sessionOverhealAmount = 0;
 OverhealPercent.m_sessionNumberOfHeals = 0;
@@ -31,13 +33,27 @@ OverhealPercent.m_printEndOfCombatResults = true;
 OverhealPercent.m_frameXPos = 0;
 OverhealPercent.m_frameYPos = 0;
 OverhealPercent.m_soundEnabled = true;
-
-OverhealPercent.m_ignoredSpells = {
-	["Judgement of Light"] = true
-};
+OverhealPercent.m_spellFilterShouldBlackList = true;
+OverhealPercent.m_spellFilter = { };
 
 function print(string)
 	DEFAULT_CHAT_FRAME:AddMessage(string)
+end
+
+function StartsWith(String, Start)
+	return string.sub(String, 1, string.len(Start)) == Start;
+end
+
+function TableLength(a_table)
+	local count = 0;
+
+	for item in pairs(a_table) do
+		if item ~= nil then
+			count = count + 1
+		end
+	end
+
+	return count
 end
 
 SLASH_OVERHEAL_PERCENT1, SLASH_OVERHEAL_PERCENT2 = '/op', '/overhealpercent';
@@ -75,9 +91,34 @@ SlashCmdList["OVERHEAL_PERCENT"] = function(msg, editbox)
 		else
 			print("OverhealPercent: Not printing combat results to chat.");
 		end
+	elseif msg == "blacklist" then
+		OverhealPercent.m_spellFilterShouldBlackList = true;
+		print("Filter spells are set to black list mode, spells in the filter list will be ignored.");
+	elseif msg == "whitelist" then
+		OverhealPercent.m_spellFilterShouldBlackList = false;
+		print("Filter spells are set to white list mode, all spells but the ones in the filter list will be ignored.");
+	elseif msg == "print filter" then
+		local filterCount = TableLength(OverhealPercent.m_spellFilter);
+
+		if OverhealPercent.m_spellFilterShouldBlackList then
+			print("Currently ignoring the following " .. filterCount .. " spells");
+		else
+			print("Currently only gather data from the following " .. filterCount .. " spells");
+		end
+
+		for i = 1, filterCount do
+			print(OverhealPercent.m_spellFilter[i]);
+		end
 	elseif msg == "reset" then
 		OverhealPercent.m_displayFrame:SetPoint("TOPLEFT", 0, 0);
+	elseif StartsWith(msg, "filter add") then
+		local commandLength = 12;
+		OverhealPercent.AddSpellToFilter(string.sub(msg, commandLength));
+	elseif StartsWith(msg, "filter remove") then
+		local commandLength = 15;
+		OverhealPercent.RemoveSpellFromFilter(string.sub(msg, commandLength));
 	else
+		print(msg);
 		OverhealPercent.PrintHelp();
 	end
 end
@@ -89,11 +130,14 @@ function OverhealPercent.PrintHelp()
 	print("</op session clear> to clear session");
 	print("</op session stats> to show detailed session stats");
 	print("</op sound> to toggle the low overhealing sound");
-	print("</op results> to toglle printing of combat stats when exiting combat");
+	print("</op results> to toggle printing of combat stats when exiting combat");
+	print("</op blacklist> to set spell ignore list mode to black list");
+	print("</op whitelist> to set spell ignore list mode to white list");
+	print("</op print filter> to print all the spells in the ignored list (adding/removing coming soon!");
 end
 
 function OverhealPercent.OnLoad(self)
-	print("OverhealPercent Loaded");
+	print("OverhealPercent Loaded! Addon by Atashi :D");
 	self:RegisterEvent("CHAT_MSG_SPELL_SELF_BUFF");
 	self:RegisterEvent("PLAYER_REGEN_DISABLED");
 	self:RegisterEvent("PLAYER_REGEN_ENABLED");
@@ -150,11 +194,15 @@ function OverhealPercent.CreateFrame()
 	OverhealPercent.m_displayFrame.sessionText:SetPoint("TOPLEFT", 3, -20);
 	OverhealPercent.m_displayFrame.sessionText:SetText("Session: 0%");
 
-	if OP_FRAME_X_POS and OP_FRAME_Y_POS then
-		OverhealPercent.m_displayFrame:SetPoint("TOPLEFT", OP_FRAME_X_POS, OP_FRAME_Y_POS);
+	if OverhealPercentDB == nil then
+		OverhealPercentDB = {};
 	end
-	OverhealPercent.m_frameXPos = OP_FRAME_X_POS;
-	OverhealPercent.m_frameYPos = OP_FRAME_Y_POS;
+
+	if OverhealPercentDB.OP_FRAME_X_POS and OverhealPercentDB.OP_FRAME_Y_POS then
+		OverhealPercent.m_displayFrame:SetPoint("TOPLEFT", OverhealPercentDB.OP_FRAME_X_POS, OverhealPercentDB.OP_FRAME_Y_POS);
+	end
+	OverhealPercent.m_frameXPos = OverhealPercentDB.OP_FRAME_X_POS;
+	OverhealPercent.m_frameYPos = OverhealPercentDB.OP_FRAME_Y_POS;
 
 	local texture = frame:CreateTexture(nil,"BACKGROUND");
 	texture:SetTexture(0, 0, 0);
@@ -177,26 +225,43 @@ function OverhealPercent.OnEvent(event, arg)
 	elseif event == "PLAYER_REGEN_ENABLED" then
 		OverhealPercent.m_inCombat = false;
 
-		if OverhealPercent.m_healAmount > 0 then
+		if OverhealPercent.m_healAmount > 0 and OverhealPercent.m_printEndOfCombatResults then
 			OverhealPercent.PrintBattleStats();
 		end
 	elseif event == "ADDON_LOADED" then
 		if arg1 == "OverhealPercent" then
-			if OP_FRAME_X_POS and OP_FRAME_Y_POS then
-				OverhealPercent.m_displayFrame:SetPoint("TOPLEFT", OP_FRAME_X_POS, OP_FRAME_Y_POS);
+			if OverhealPercentDB == nil then
+				OverhealPercentDB = {};
 			end
+
+			if OverhealPercentDB.OP_FRAME_X_POS and OverhealPercentDB.OP_FRAME_Y_POS then
+				OverhealPercent.m_displayFrame:SetPoint("TOPLEFT", OverhealPercentDB.OP_FRAME_X_POS, OverhealPercentDB.OP_FRAME_Y_POS);
+			end
+
+			OverhealPercent.m_soundEnabled = OverhealPercentDB.OP_PLAY_SOUND;
+			OverhealPercent.m_spellFilterShouldBlackList = OverhealPercentDB.OP_BLACK_LIST;
+
+			if OverhealPercentDB.OP_SPELL_FILTER then
+				OverhealPercent.m_spellFilter = OverhealPercentDB.OP_SPELL_FILTER;
+			end
+
+			OverhealPercent.ClearSpellFilterOfNilValues();
 		end
-	elseif event == "PLAYER_LOGOUT" then
-		OP_FRAME_X_POS = OverhealPercent.m_frameXPos;
-		OP_FRAME_Y_POS = OverhealPercent.m_frameYPos;
-		OP_PRINT_RESULTS = OverhealPercent.m_printEndOfCombatResults;
-		OP_PLAY_SOUND = OverhealPercent.m_soundEnabled;
+	elseif event == "PLAYER_LOGOUT" and DidCompile then
+		OverhealPercentDB.OP_FRAME_X_POS = OverhealPercent.m_frameXPos;
+		OverhealPercentDB.OP_FRAME_Y_POS = OverhealPercent.m_frameYPos;
+		OverhealPercentDB.OP_PRINT_RESULTS = OverhealPercent.m_printEndOfCombatResults;
+		OverhealPercentDB.OP_PLAY_SOUND = OverhealPercent.m_soundEnabled;
+		OverhealPercentDB.OP_BLACK_LIST = OverhealPercent.m_spellFilterShouldBlackList;
+		OverhealPercentDB.OP_SPELL_FILTER = OverhealPercent.m_spellFilter;
 	end
 end
 
 function OverhealPercent.ClearText()
 	OverhealPercent.m_healAmount = 0;
 	OverhealPercent.m_overhealAmount = 0;
+	OverhealPercent.m_battleNumberOfHeals = 0;
+	OverhealPercent.m_battleNumberOfCrits = 0;
 	OverhealPercent.m_inCombat = true;
 	OverhealPercent.SetOverhealText(0);
 end
@@ -204,6 +269,17 @@ end
 function OverhealPercent.ClearSession()
 	OverhealPercent.m_sessionOverhealAmount = 0;
 	OverhealPercent.m_sessionHealAmount = 0;
+end
+
+function OverhealPercent.ClearSpellFilterOfNilValues()
+	local tableLength = TableLength(OverhealPercent.m_spellFilter);
+
+	for i = 0, tableLength do
+		if OverhealPercent.m_spellFilter == nil then
+			table.remove(OverhealPercent.m_spellFilter, i);
+			i = i - 1;
+		end
+	end
 end
 
 function OverhealPercent.PrintSessionStats()
@@ -231,13 +307,37 @@ function OverhealPercent.PrintBattleStats()
 	local overhealPercentage = OverhealPercent.GetBattleOverhealPercentage();
 	local critPercentage = OverhealPercent.GetBattleCritPercentage();
 
-	if OverhealPercent.m_printEndOfCombatResults then
-		print("Healed " .. OverhealPercent.m_healAmount .. ", overhealed " .. OverhealPercent.m_overhealAmount .. " (" .. overhealPercentage .. "%) Crit% " .. critPercentage);
-	end
+	print("Healed " .. OverhealPercent.m_healAmount .. ", overhealed " .. OverhealPercent.m_overhealAmount .. " (" .. overhealPercentage .. "%) Crit " .. critPercentage .. "%");
 	
 	if OverhealPercent.m_soundEnabled and overhealPercentage < 5 then
 		PlaySoundFile("Interface\\AddOns\\OverhealPercent\\wAWWWW.mp3")
 	end
+end
+
+function OverhealPercent.AddSpellToFilter(a_spellName)
+	print("Added \"" .. a_spellName .. "\" to the spell filter");
+	table.insert(OverhealPercent.m_spellFilter, string.lower(a_spellName));
+end
+
+function OverhealPercent.RemoveSpellFromFilter(a_spellName)
+	local spellIndex = 1;
+	local foundSpell = false;
+	
+	for k, spell in OverhealPercent.m_spellFilter do
+		if spell == string.lower(a_spellName) then
+			foundSpell = true;
+			break;
+		end
+		spellIndex = spellIndex + 1;
+	end
+
+	if not foundSpell then
+		print("Could not find \"" .. a_spellName .. "\" in the spell filter");
+		return;
+	end
+	
+	print("Removed \"" .. a_spellName .. "\" from spell filter");
+	table.remove(OverhealPercent.m_spellFilter, spellIndex);
 end
 
 function OverhealPercent.SetOverhealText(a_amount)
@@ -255,11 +355,11 @@ function OverhealPercent.GetBattleOverhealPercentage()
 end
 
 function OverhealPercent.GetBattleCritPercentage()
-	if OverhealPercent.m_numberOfCrits == 0 then
+	if OverhealPercent.m_battleNumberOfCrits == 0 then
 		return 0;
 	end
 
-	return math.floor((OverhealPercent.m_numberOfCrits / OverhealPercent.m_numberOfHits) * 100 + 0.5);
+	return math.floor((OverhealPercent.m_battleNumberOfCrits / OverhealPercent.m_battleNumberOfHeals) * 100 + 0.5);
 end
 
 function OverhealPercent.GetSessionOverhealPercentage()
@@ -287,40 +387,68 @@ function OverhealPercent.ParseForOutgoingSpellHeals(combatMessage)
 	-- Look for a critical heal to yourself.
 	local capturedData = OverhealPercent.GetCapturedData(combatMessage, "HEALEDCRITSELFSELF", {"%s", "%a"});
 	if capturedData ~= nil then
-		if OverhealPercent.m_ignoredSpells[capturedData.SpellName] ~= nil then
-			return;
+		if OverhealPercent.m_spellFilterShouldBlackList then
+			if OverhealPercent.m_spellFilter[string.lower(capturedData.SpellName)] ~= nil then
+				return;
+			end
+		else
+			if OverhealPercent.m_spellFilter[string.lower(capturedData.SpellName)] == nil then
+				return;
+			end
 		end
 		eventData = OverhealPercent.GetHealEventData(OverhealPercent.DIRECTIONTYPE_PLAYER_INCOMING, OverhealPercent.HEALTYPE_CRIT, capturedData.Amount, capturedData.SpellName, OverhealPercent.playerName);
+		OverhealPercent.m_battleNumberOfCrits = OverhealPercent.m_battleNumberOfCrits + 1;
 		OverhealPercent.m_sessionNumberOfCrits = OverhealPercent.m_sessionNumberOfCrits + 1;
 	end
 
 	-- Look for a heal to yourself.
 	local capturedData = OverhealPercent.GetCapturedData(combatMessage, "HEALEDSELFSELF", {"%s", "%a"});
 	if capturedData ~= nil then
-		if OverhealPercent.m_ignoredSpells[capturedData.SpellName] ~= nil then
-			return;
+		if OverhealPercent.m_spellFilterShouldBlackList then
+			if OverhealPercent.m_spellFilter[string.lower(capturedData.SpellName)] ~= nil then
+				return;
+			end
+		else
+			if OverhealPercent.m_spellFilter[string.lower(capturedData.SpellName)] == nil then
+				return;
+			end
 		end
 		eventData = OverhealPercent.GetHealEventData(OverhealPercent.DIRECTIONTYPE_PLAYER_INCOMING, OverhealPercent.HEALTYPE_NORMAL, capturedData.Amount, capturedData.SpellName, OverhealPercent.playerName);
+		OverhealPercent.m_battleNumberOfHeals = OverhealPercent.m_battleNumberOfHeals + 1;
 		OverhealPercent.m_sessionNumberOfHeals = OverhealPercent.m_sessionNumberOfHeals + 1;
 	end
 
 	-- Look for a critical heal to someone else.
 	local capturedData = OverhealPercent.GetCapturedData(combatMessage, "HEALEDCRITSELFOTHER", {"%s", "%n", "%a"});
 	if capturedData ~= nil and capturedData.Name ~= "you" then
-		if OverhealPercent.m_ignoredSpells[capturedData.SpellName] ~= nil then
-			return;
+		if OverhealPercent.m_spellFilterShouldBlackList then
+			if OverhealPercent.m_spellFilter[string.lower(capturedData.SpellName)] ~= nil then
+				return;
+			end
+		else
+			if OverhealPercent.m_spellFilter[string.lower(capturedData.SpellName)] == nil then
+				return;
+			end
 		end
 		eventData = OverhealPercent.GetHealEventData(OverhealPercent.DIRECTIONTYPE_PLAYER_OUTGOING, OverhealPercent.HEALTYPE_CRIT, capturedData.Amount, capturedData.SpellName, capturedData.Name);
+		OverhealPercent.m_battleNumberOfCrits = OverhealPercent.m_battleNumberOfCrits + 1;
 		OverhealPercent.m_sessionNumberOfCrits = OverhealPercent.m_sessionNumberOfCrits + 1;
 	end
 
 	-- Look for a heal to someone else.
 	local capturedData = OverhealPercent.GetCapturedData(combatMessage, "HEALEDSELFOTHER", {"%s", "%n", "%a"});
 	if capturedData ~= nil and capturedData.Name ~= "you" then
-		if OverhealPercent.m_ignoredSpells[capturedData.SpellName] ~= nil then
-			return;
+		if OverhealPercent.m_spellFilterShouldBlackList then
+			if OverhealPercent.m_spellFilter[string.lower(capturedData.SpellName)] ~= nil then
+				return;
+			end
+		else
+			if OverhealPercent.m_spellFilter[string.lower(capturedData.SpellName)] == nil then
+				return;
+			end
 		end
 		eventData = OverhealPercent.GetHealEventData(OverhealPercent.DIRECTIONTYPE_PLAYER_OUTGOING, OverhealPercent.HEALTYPE_NORMAL, capturedData.Amount, capturedData.SpellName, capturedData.Name);
+		OverhealPercent.m_battleNumberOfHeals = OverhealPercent.m_battleNumberOfHeals + 1;
 		OverhealPercent.m_sessionNumberOfHeals = OverhealPercent.m_sessionNumberOfHeals + 1;
 	end
 
@@ -682,3 +810,5 @@ function OverhealPercent.GetUnitIDFromName(uName)
 	-- Return the unit id.
 	return unitID;
 end
+
+DidCompile = true;

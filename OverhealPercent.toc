@@ -5,9 +5,6 @@
 ## eMail: nej
 ## URL: nej
 ## Notes: Harpunen
-## SavedVariablesPerCharacter: OP_FRAME_X_POS
-## SavedVariablesPerCharacter: OP_FRAME_Y_POS
-## SavedVariablesPerCharacter: OP_PRINT_RESULTS
-## SavedVariablesPerCharacter: OP_PLAY_SOUND
+## SavedVariablesPerCharacter: OverhealPercentDB
 OverhealPercent.lua
 OverhealPercent.xml
